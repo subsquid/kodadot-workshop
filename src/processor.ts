@@ -1,14 +1,15 @@
-import * as ss58 from "@subsquid/ss58";
 import {
-  EventHandlerContext,
+  ExtrinsicHandlerContext,
   Store,
   SubstrateProcessor,
 } from "@subsquid/substrate-processor";
 import { lookupArchive } from "@subsquid/archive-registry";
-import { Account, HistoricalBalance } from "./model";
-import { BalancesTransferEvent } from "./types/events";
+import { SystemRemarkCall } from "./types/calls";
+import { extractRemark, getAction, hexToString } from "./utils";
+import { Interaction } from "./model";
 
-const processor = new SubstrateProcessor("kusama_balances");
+const processor = new SubstrateProcessor("kusama_remark");
+processor.setBlockRange({from:5756453});
 
 processor.setBatchSize(500);
 processor.setDataSource({
@@ -16,81 +17,62 @@ processor.setDataSource({
   chain: "wss://kusama-rpc.polkadot.io",
 });
 
-processor.addEventHandler("balances.Transfer", async (ctx) => {
-  const transfer = getTransferEvent(ctx);
-  const tip = ctx.extrinsic?.tip || 0n;
-  const from = ss58.codec("kusama").encode(transfer.from);
-  const to = ss58.codec("kusama").encode(transfer.to);
-
-  const fromAcc = await getOrCreate(ctx.store, Account, from);
-  fromAcc.balance = fromAcc.balance || 0n;
-  fromAcc.balance -= transfer.amount;
-  fromAcc.balance -= tip;
-  await ctx.store.save(fromAcc);
-
-  const toAcc = await getOrCreate(ctx.store, Account, to);
-  toAcc.balance = toAcc.balance || 0n;
-  toAcc.balance += transfer.amount;
-  await ctx.store.save(toAcc);
-
-  await ctx.store.save(
-    new HistoricalBalance({
-      id: `${ctx.event.id}-to`,
-      account: fromAcc,
-      balance: fromAcc.balance,
-      date: new Date(ctx.block.timestamp),
-    })
-  );
-
-  await ctx.store.save(
-    new HistoricalBalance({
-      id: `${ctx.event.id}-from`,
-      account: toAcc,
-      balance: toAcc.balance,
-      date: new Date(ctx.block.timestamp),
-    })
-  );
-});
+processor.addExtrinsicHandler("system.remark", handleRemark);
 
 processor.run();
 
-interface TransferEvent {
-  from: Uint8Array;
-  to: Uint8Array;
-  amount: bigint;
-}
+async function handleRemark(ctx: ExtrinsicHandlerContext): Promise<void>{
+  const remark = new SystemRemarkCall(ctx).asV1020.remark
+  const records = extractRemark(remark.toString(), ctx)
+  for (const remark of records) {
+    try {
+      const decoded = hexToString(remark.value)
+      const event_type: Interaction = getAction(decoded)
 
-function getTransferEvent(ctx: EventHandlerContext): TransferEvent {
-  const event = new BalancesTransferEvent(ctx);
-  if (event.isV1020) {
-    const [from, to, amount] = event.asV1020;
-    return { from, to, amount };
-  } else if (event.isV1050) {
-    const [from, to, amount] = event.asV1050;
-    return { from, to, amount };
-  } else {
-    const { from, to, amount } = event.asV9130;
-    return { from, to, amount };
+      if (event_type == Interaction.MINTNFT) {
+        let nft: NFT | null = null
+        try {
+          nft = NFTUtils.unwrap(remark.value) as NFT
+          canOrElseError<string>(exists, nft.collection, true)
+          const collection = ensure<CollectionEntity>(
+            await get<CollectionEntity>(store, CollectionEntity, nft.collection)
+          )
+          canOrElseError<CollectionEntity>(exists, collection, true)
+          isOwnerOrElseError(collection, remark.caller)
+          const final = create<NFTEntity>(NFTEntity, collection.id, {})
+          const id = getNftId(nft, remark.blockNumber)
+          final.id = id
+          final.hash = md5(id)
+          final.issuer = remark.caller
+          final.currentOwner = remark.caller
+          final.blockNumber = BigInt(remark.blockNumber)
+          final.name = nft.name
+          final.instance = nft.instance
+          final.transferable = nft.transferable
+          final.collection = collection
+          final.sn = nft.sn
+          final.metadata = nft.metadata
+          final.price = BigInt(0)
+          final.burned = false
+          final.createdAt = remark.timestamp
+          final.updatedAt = remark.timestamp
+
+          const metadata = await handleMetadata(final.metadata, final.name, store)
+          final.meta = metadata
+
+          console.log(`[MINT] ${final.id}`);
+          await ctx.store.save(final)
+          await createEvent(final, RmrkEvent.MINTNFT, remark, '', ctx.store)
+
+        } catch (e) {
+          console.log(`[MINT] ${e.message}, ${JSON.stringify(nft)}`)
+          // await logFail(JSON.stringify(nft), e.message, RmrkEvent.MINTNFT)
+        }
+      }
+    } catch (e) {
+      logger.warn(
+        `[MALFORMED] ${remark.blockNumber}::${hexToString(remark.value)}`
+      )
+    }
   }
 }
-
-async function getOrCreate<T extends { id: string }>(
-  store: Store,
-  EntityConstructor: EntityConstructor<T>,
-  id: string
-): Promise<T> {
-  let entity = await store.get<T>(EntityConstructor, {
-    where: { id },
-  });
-
-  if (entity == null) {
-    entity = new EntityConstructor();
-    entity.id = id;
-  }
-
-  return entity;
-}
-
-type EntityConstructor<T> = {
-  new (...args: any[]): T;
-};

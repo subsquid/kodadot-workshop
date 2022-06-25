@@ -2,8 +2,8 @@
   "outDir": "src/types",
   "chainVersions": "kusamaVersions.json",
   "typesBundle": "kusama",
-  "events": [
-    "balances.Transfer"
-  ],
-  "calls": []
+  "events": [],
+  "calls": [
+    "system.remark"
+  ]
 }

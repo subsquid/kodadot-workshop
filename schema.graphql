@@ -1,13 +1,83 @@
-type Account @entity {
-  "Account address"
+type NFTEntity @entity {
+  name: String
+  instance: String
+  transferable: Int
+  collection: CollectionEntity!
+  issuer: String
+  sn: String
   id: ID!
-  balance: BigInt!
-  historicalBalances: [HistoricalBalance!] @derivedFrom(field: "account")
+  hash: String! @index
+  metadata: String
+  currentOwner: String
+  price: BigInt!
+  burned: Boolean!
+  blockNumber: BigInt
+  # events: [Event!] @derivedFrom(field: "nft")
+  # emotes: [Emote!] @derivedFrom(field: "nft")
+  meta: MetadataEntity
+  createdAt: DateTime!
+  updatedAt: DateTime!
 }
 
-type HistoricalBalance @entity {
+type CollectionEntity @entity {
+  version: String
+  name: String
+  max: Int!
+  issuer: String
+  symbol: String
   id: ID!
-  account: Account!
-  balance: BigInt!
-  date: DateTime!
+  metadata: String
+  currentOwner: String
+  nfts: [NFTEntity!] @derivedFrom(field: "collection")
+  events: [CollectionEvent!]
+  blockNumber: BigInt
+  meta: MetadataEntity
+  createdAt: DateTime!
+}
+
+type CollectionEvent @jsonField {
+  blockNumber: String
+  timestamp: DateTime
+  caller: String!
+  interaction: String!
+  meta: String!
+}
+
+type MetadataEntity @entity {
+  id: ID!
+  name: String
+  description: String
+  image: String
+  attributes: [Attribute!]
+  animationUrl: String
+  type: String
+}
+
+type Attribute @jsonField {
+  display: String
+  trait: String
+  value: String!
+}
+
+enum Interaction {
+  MINT
+  MINTNFT
+  LIST
+  UNLIST
+  BUY
+  SEND
+  CONSUME
+  CHANGEISSUER
+  EMOTE
+}
+
+type Event @entity {
+  id: ID!
+  blockNumber: BigInt
+  timestamp: DateTime!
+  caller: String!
+  currentOwner: String! # currentOwner
+  interaction: Interaction!
+  meta: String!
+  nft: NFTEntity!
 }
